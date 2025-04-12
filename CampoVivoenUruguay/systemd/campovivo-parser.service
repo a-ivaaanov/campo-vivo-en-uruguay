@@ -1,0 +1,18 @@
+[Unit]
+Description=CampoVivoenUruguay Parser Service
+After=network.target
+
+[Service]
+Type=simple
+User=your_username
+Group=your_username
+WorkingDirectory=/path/to/CampoVivoenUruguay
+ExecStart=/usr/bin/python3 cron_scheduler.py --interval 180 --telegram
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target 

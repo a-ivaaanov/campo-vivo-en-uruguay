@@ -1,0 +1,28 @@
+# Основные библиотеки
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+loguru>=0.7.0
+tenacity>=8.2.3
+
+# Парсинг и браузерная автоматизация
+playwright>=1.40.0
+beautifulsoup4>=4.12.2
+lxml>=4.9.3
+
+# Асинхронность и HTTP
+aiohttp>=3.8.6
+aiofiles>=23.2.1
+asyncio>=3.4.3
+
+# Работа с данными
+pandas>=2.1.1
+numpy>=1.25.2
+
+# Telegram
+python-telegram-bot>=20.6
+
+# Утилиты
+tqdm>=4.66.1
+Pillow>=10.1.0
+python-dateutil>=2.8.2
+pytz>=2023.3.post1

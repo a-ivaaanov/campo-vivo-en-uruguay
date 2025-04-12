@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Виртуальное окружение
+venv/
+ENV/
+
+# Логи и кэши
+logs/
+*.log
+.cache/
+cache/
+*.cache
+
+# Результаты парсинга
+results/
+*.json
+!requirements.json
+
+# Конфиденциальные данные
+.env
+.env.*
+!.env.example
+.secret
+
+# Файлы IDE
+.idea/
+.vscode/
+*.sublime-workspace
+*.sublime-project
+
+# Playwright
+playwright-report/
+
+# Временные файлы
+temp/
+tmp/
+
+# Системные файлы macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Файлы Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Общие резервные файлы
+*.bak
+*.swp
+*~
+\#*\# 

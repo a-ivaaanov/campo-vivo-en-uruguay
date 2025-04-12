@@ -1,0 +1,20 @@
+Объявление 1:
+  URL: https://terreno.mercadolibre.com.uy/MLU-707739404-barrio-abierto-en-ruta-21-los-ceibos-_JM
+  Заголовок: Barrio Abierto En Ruta 21 Los Ceibos
+  Цена: US$ 29.900
+  Расположение: Uruguay
+  Площадь: None
+  Изображение: https://http2.mlstatic.com/D_NQ_NP_2X_845364-MLU82007106867_012025-E.webp
+  Коммуникации: Не указано
+  Новое: Нет
+
+Объявление 2:
+  URL: https://terreno.mercadolibre.com.uy/MLU-690599348-lotes-en-design-village-barrio-privado-en-solanas-financiacion-del-100-a-sola-firma-_JM
+  Заголовок: Lotes En Design Village Barrio Privado En Solanas . Financiacion del 100% a sola firma
+  Цена: US$ 155.000
+  Расположение: Uruguay
+  Площадь: None
+  Изображение: https://http2.mlstatic.com/D_NQ_NP_2X_629935-MLU78263296174_082024-E.webp
+  Коммуникации: Не указано
+  Новое: Нет
+
