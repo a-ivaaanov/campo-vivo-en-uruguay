@@ -42,4 +42,7 @@ python-dateutil==2.8.2
 # Утилиты
 xxhash==3.4.1
 pytest==7.4.3
-pytest-asyncio==0.23.2 
+pytest-asyncio==0.23.2
+
+# Веб-сервер для деплоя
+gunicorn==21.2.0 
