@@ -4,7 +4,7 @@ services:
     name: campo-vivo-en-uruguay
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 1 --threads 4 --timeout 60 --bind 0.0.0.0:$PORT app.wsgi:application
+    startCommand: gunicorn --workers 1 --threads 4 --timeout 60 --bind 0.0.0.0:$PORT wsgi:application
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
