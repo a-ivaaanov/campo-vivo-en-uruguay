@@ -4,7 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -16,20 +15,43 @@ lib64/
 parts/
 sdist/
 var/
+wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 
-# Виртуальное окружение
+# Virtual Environment
 venv/
+.env
+.venv
+env/
 ENV/
 
-# Логи и кэши
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Project specific
 logs/
+data/
+errors/
+results/
+test_results/
+tmp_images/
 *.log
 .cache/
 cache/
 *.cache
+
+# Playwright
+.playwright/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
 
 # Результаты парсинга
 results/
@@ -47,9 +69,6 @@ results/
 .vscode/
 *.sublime-workspace
 *.sublime-project
-
-# Playwright
-playwright-report/
 
 # Временные файлы
 temp/
@@ -70,4 +89,9 @@ Desktop.ini
 *.bak
 *.swp
 *~
-\#*\# 
+\#*\#
+
+# Не игнорировать
+!config/*.json
+!.env.example
+!requirements.txt 

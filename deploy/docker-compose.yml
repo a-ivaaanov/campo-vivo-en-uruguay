@@ -1,0 +1,56 @@
+version: '3'
+
+services:
+  campo-vivo:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: campo-vivo
+    restart: unless-stopped
+    volumes:
+      - ../data:/app/data
+      - ../logs:/app/logs
+      - ../errors:/app/errors
+      - ../results:/app/results
+      - ../.env:/app/.env
+    environment:
+      - TZ=America/Montevideo
+    networks:
+      - campo-network
+  
+  # Опционально: Prometheus для мониторинга
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+    ports:
+      - "9090:9090"
+    networks:
+      - campo-network
+  
+  # Опционально: Grafana для визуализации
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    networks:
+      - campo-network
+    depends_on:
+      - prometheus
+
+networks:
+  campo-network:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data: 

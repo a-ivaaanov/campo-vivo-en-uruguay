@@ -1,105 +1,77 @@
-from pydantic import BaseModel, HttpUrl, Field
-from typing import Optional, List, Dict, Any, Union, Literal
-from datetime import datetime, timezone
+#!/usr/bin/env python3
+"""
+Модели данных Pydantic для проекта UruguayLands.
+"""
 
-# Вспомогательная функция для получения текущего времени UTC
-def now_utc():
-    return datetime.now(timezone.utc)
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+from pydantic import BaseModel, Field, validator
 
 class Listing(BaseModel):
-    """Модель данных для одного объявления о земельном участке."""
-    # Обязательные поля
-    id: str
-    url: HttpUrl
-    source: str # Источник (например, 'mercadolibre', 'infocasas')
+    """Модель объявления о земельном участке"""
     
-    # Основные характеристики
-    title: Optional[str] = None
-    description: Optional[str] = None
-    location: Optional[str] = None
+    # Основные данные
+    id: str = Field(..., description="Уникальный идентификатор объявления")
+    url: str = Field(..., description="URL объявления")
+    title: str = Field(..., description="Заголовок объявления")
+    source: str = Field(..., description="Источник объявления (MercadoLibre, InfoCasas и т.д.)")
     
-    # Изображения
-    images: Optional[List[str]] = None
+    # Ценовая информация
+    price: Optional[int] = Field(None, description="Цена в USD")
+    price_currency: str = Field("USD", description="Валюта цены")
+    price_per_sqm: Optional[float] = Field(None, description="Цена за квадратный метр")
     
-    # Цена и валюта
-    price: Optional[float] = None  # Цена (число)
-    price_currency: Optional[str] = "USD"  # Валюта (по умолчанию USD)
-    price_per_sqm: Optional[float] = None  # Цена за квадратный метр
+    # Местоположение
+    location: Optional[str] = Field(None, description="Местоположение участка")
+    region: Optional[str] = Field(None, description="Регион (департамент)")
+    city: Optional[str] = Field(None, description="Город или населенный пункт")
     
-    # Площадь
-    area: Optional[float] = None  # Площадь в квадратных метрах (число)
-    area_unit: Optional[str] = "m²"  # Единица измерения площади
+    # Характеристики участка
+    area: Optional[int] = Field(None, description="Площадь участка в кв.м.")
+    area_unit: str = Field("sqm", description="Единица измерения площади")
     
-    # Коммуникации и характеристики
-    has_water: Optional[bool] = None  # Наличие воды
-    has_electricity: Optional[bool] = None  # Наличие электричества
-    has_internet: Optional[bool] = None  # Наличие интернета
-    zoning: Optional[str] = None  # Зонирование участка
-    terrain_type: Optional[str] = None  # Тип местности
+    # Коммуникации и зонирование
+    has_water: Optional[bool] = Field(None, description="Наличие воды")
+    has_electricity: Optional[bool] = Field(None, description="Наличие электричества")
+    has_internet: Optional[bool] = Field(None, description="Наличие интернета")
+    zoning: Optional[str] = Field(None, description="Зонирование (сельское, городское и т.д.)")
+    
+    # Описание и дополнительная информация
+    description: Optional[str] = Field(None, description="Полное описание объявления")
+    characteristics: Optional[Dict[str, Any]] = Field(None, description="Характеристики участка в виде ключ-значение")
+    
+    # Медиа-контент
+    images: Optional[List[str]] = Field(None, description="Список URL изображений")
+    image_count: Optional[int] = Field(None, description="Количество изображений")
     
     # Метаданные
-    crawled_at: datetime = Field(default_factory=now_utc)  # Дата и время сбора данных
-    status: str = "active"  # Статус объявления (active, expired, sold, etc.)
+    created_at: Optional[datetime] = Field(None, description="Дата создания объявления")
+    updated_at: Optional[datetime] = Field(None, description="Дата обновления объявления")
+    crawled_at: datetime = Field(default_factory=datetime.now, description="Дата парсинга объявления")
     
-    # Дополнительные атрибуты для хранения несистематизированных данных
-    attributes: Optional[Dict[str, Any]] = None
-
-    class Config:
-        """Конфигурация модели."""
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
-        
-    def format_price(self) -> str:
-        """Форматирует цену с разделителями тысяч."""
-        if self.price is None:
-            return ""
-        
-        price_int = int(self.price)
-        formatted = f"{price_int:,}".replace(',', ' ')
-        
-        if self.price_currency:
-            return f"{formatted} {self.price_currency}"
-        return formatted
+    # Хэш для проверки дубликатов
+    content_hash: Optional[str] = Field(None, description="Хэш содержимого для определения дубликатов")
     
-    def format_area(self) -> str:
-        """Форматирует площадь с учетом единиц измерения."""
-        if self.area is None:
-            return ""
-        
-        # Форматируем с разделителями тысяч
-        area_formatted = f"{self.area:,}".replace(',', ' ').replace('.0', '')
-        
-        if self.area_unit:
-            return f"{area_formatted} {self.area_unit}"
-        return area_formatted
-    
-    def to_hectares(self) -> Optional[float]:
-        """Конвертирует площадь в гектары, если применимо."""
-        if self.area is None:
-            return None
-        
-        # Если площадь в квадратных метрах, переводим в гектары (1 га = 10000 м²)
-        if self.area_unit == "m²":
-            return self.area / 10000
-        
-        # Если уже в гектарах
-        if self.area_unit == "ha":
-            return self.area
-            
+    @validator('price_per_sqm', pre=True, always=False)
+    def calculate_price_per_sqm(cls, v, values):
+        """Расчет цены за квадратный метр, если не указана"""
+        if v is not None:
+            return v
+        if values.get('price') and values.get('area') and values.get('area') > 0:
+            return round(values['price'] / values['area'], 2)
         return None
     
-    def is_recent(self, hours: int = 24) -> bool:
-        """Проверяет, является ли объявление недавним (в пределах указанного количества часов)."""
-        if not self.crawled_at:
-            return False
-            
-        time_diff = datetime.now(timezone.utc) - self.crawled_at
-        return time_diff.total_seconds() < hours * 3600
+    @validator('image_count', pre=True, always=False)
+    def count_images(cls, v, values):
+        """Подсчет количества изображений, если не указано"""
+        if v is not None:
+            return v
+        if values.get('images'):
+            return len(values['images'])
+        return None
     
-    def calculate_price_per_sqm(self) -> Optional[float]:
-        """Вычисляет цену за квадратный метр."""
-        if self.price is None or self.area is None or self.area == 0:
-            return None
-            
-        return self.price / self.area
+    class Config:
+        arbitrary_types_allowed = True
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        } 

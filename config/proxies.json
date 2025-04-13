@@ -1,0 +1,28 @@
+{
+  "proxies": [
+    {
+      "id": "proxy1",
+      "server": "123.123.123.123:8080",
+      "user_pattern": "username",
+      "password": "password",
+      "country": "UY",
+      "type": "http"
+    },
+    {
+      "id": "proxy2",
+      "server": "proxy.example.com:3128",
+      "user_pattern": "username2",
+      "password": "password2",
+      "country": "UY",
+      "type": "http"
+    },
+    {
+      "id": "smartproxy",
+      "server": "gate.smartproxy.com:7000",
+      "user_pattern": "sp_username",
+      "password": "sp_password",
+      "country": "UY",
+      "type": "https"
+    }
+  ]
+} 

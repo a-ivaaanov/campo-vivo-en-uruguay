@@ -1,445 +1,430 @@
-import asyncio
-import aiohttp
-import json
+#!/usr/bin/env python3
+"""
+Модуль для отправки объявлений в Telegram-канал.
+"""
+
 import os
 import logging
-import re
+import asyncio
+import requests
+from typing import List, Optional, Dict, Any, Set, Tuple
+from datetime import datetime
+from io import BytesIO
+from pydantic import HttpUrl
+from urllib.parse import urlparse
+import json
 import time
 from pathlib import Path
-from typing import List, Dict, Optional, Union, Set
-from aiohttp import ClientSession, ClientTimeout
-from datetime import datetime, timezone
 
 from app.models import Listing
 
+logger = logging.getLogger(__name__)
+
 class TelegramSender:
-    """Класс для отправки форматированных сообщений о земельных участках в канал Telegram."""
+    """
+    Класс для отправки объявлений о земельных участках в Telegram канал.
+    Поддерживает форматирование сообщений, загрузку изображений и проверку
+    уже отправленных объявлений.
+    """
     
     def __init__(
         self, 
         bot_token: str, 
         chat_id: str,
-        cache_dir: str = "cache",
+        sent_listings_file: str = "cache/sent_listings.json",
+        max_images_per_listing: int = 5,
         max_retries: int = 3,
-        retry_delay: int = 5,
-        max_images: int = 5,
-        download_images: bool = True
+        retry_delay: int = 2,
     ):
         """
-        Инициализирует отправителя Telegram.
+        Инициализация отправителя Telegram.
         
-        :param bot_token: Токен Telegram бота
-        :param chat_id: ID чата/канала для отправки сообщений
-        :param cache_dir: Директория для хранения кэша отправленных объявлений
-        :param max_retries: Максимальное количество попыток при ошибках
-        :param retry_delay: Задержка между повторными попытками в секундах
-        :param max_images: Максимальное количество изображений для отправки
-        :param download_images: Скачивать изображения перед отправкой
+        Args:
+            bot_token: Токен Telegram бота
+            chat_id: ID чата или канала для отправки сообщений
+            sent_listings_file: Путь к файлу для хранения отправленных объявлений
+            max_images_per_listing: Максимальное количество изображений для одного объявления
+            max_retries: Максимальное количество повторных попыток при ошибке
+            retry_delay: Задержка между повторными попытками (в секундах)
         """
-        self.logger = logging.getLogger(__name__)
         self.bot_token = bot_token
         self.chat_id = chat_id
-        self.api_url = f"https://api.telegram.org/bot{bot_token}"
-        self.cache_dir = Path(cache_dir)
-        self.sent_listings_file = self.cache_dir / "sent_listings.json"
+        self.sent_listings_file = sent_listings_file
+        self.max_images_per_listing = max_images_per_listing
         self.max_retries = max_retries
         self.retry_delay = retry_delay
-        self.max_images = max_images
-        self.download_images = download_images
         
-        # Журнал отправленных объявлений (хранит URLs)
+        # Множество URL-адресов отправленных объявлений
         self.sent_listings: Set[str] = set()
         
-        # Убедимся, что директория кэша существует
+        # Загружаем ранее отправленные объявления при инициализации
         self._ensure_cache_dir()
+        self.load_sent_listings()
+    
+    def _ensure_cache_dir(self) -> None:
+        """Убедиться, что директория для кэша существует"""
+        cache_dir = os.path.dirname(self.sent_listings_file)
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir, exist_ok=True)
+            logger.info(f"Создана директория для кэша отправленных объявлений: {cache_dir}")
+    
+    def load_sent_listings(self) -> None:
+        """Загрузить список ранее отправленных объявлений"""
+        if not os.path.exists(self.sent_listings_file):
+            logger.info(f"Файл с отправленными объявлениями не найден: {self.sent_listings_file}")
+            return
         
-        # Загрузим ранее отправленные объявления
-        self._load_sent_listings()
-    
-    def _ensure_cache_dir(self):
-        """Убеждается, что директория кэша существует."""
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-    
-    def _load_sent_listings(self):
-        """Загружает ранее отправленные объявления из файла."""
-        if self.sent_listings_file.exists():
-            try:
-                with open(self.sent_listings_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    self.sent_listings = set(data)
-                self.logger.info(f"Загружено {len(self.sent_listings)} ранее отправленных объявлений")
-            except Exception as e:
-                self.logger.error(f"Ошибка при загрузке отправленных объявлений: {e}")
-                # Создаем новый файл, если старый поврежден
-                self._save_sent_listings()
-    
-    def _save_sent_listings(self):
-        """Сохраняет отправленные объявления в файл."""
         try:
-            with open(self.sent_listings_file, 'w', encoding='utf-8') as f:
-                json.dump(list(self.sent_listings), f, ensure_ascii=False, indent=2)
-            self.logger.debug(f"Сохранено {len(self.sent_listings)} отправленных объявлений")
+            with open(self.sent_listings_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                self.sent_listings = set(data.get('sent_urls', []))
+                
+            logger.info(f"Загружено {len(self.sent_listings)} ранее отправленных объявлений")
         except Exception as e:
-            self.logger.error(f"Ошибка при сохранении отправленных объявлений: {e}")
+            logger.error(f"Ошибка при загрузке отправленных объявлений: {e}")
+            self.sent_listings = set()
     
-    def _escape_markdown(self, text: str) -> str:
-        """
-        Экранирует специальные символы для Markdown V2.
-        
-        :param text: Исходный текст
-        :return: Экранированный текст для Markdown V2
-        """
-        if not text:
-            return ""
+    def save_sent_listings(self) -> None:
+        """Сохранить список отправленных объявлений"""
+        try:
+            data = {'sent_urls': list(self.sent_listings)}
             
-        # Символы, которые нужно экранировать: _ * [ ] ( ) ~ ` > # + - = | { } . !
-        escape_chars = r'_*[]()~`>#+-=|{}.!'
-        
-        for char in escape_chars:
-            text = text.replace(char, f'\\{char}')
-        
-        return text
+            with open(self.sent_listings_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                
+            logger.debug(f"Сохранено {len(self.sent_listings)} отправленных объявлений")
+        except Exception as e:
+            logger.error(f"Ошибка при сохранении отправленных объявлений: {e}")
     
     def format_message(self, listing: Listing) -> str:
         """
-        Форматирует сообщение для отправки в Telegram.
+        Форматирует сообщение для Telegram с использованием Markdown V2.
         
-        :param listing: Объект объявления
-        :return: Отформатированное сообщение с Markdown V2
+        Args:
+            listing: Объект объявления
+            
+        Returns:
+            str: Отформатированное сообщение
         """
-        # Основная информация (заголовок, цена, площадь)
-        title = self._escape_markdown(listing.title or "Земельный участок")
-        price = self._escape_markdown(listing.format_price() or "Цена не указана")
-        area = self._escape_markdown(listing.format_area() or "Площадь не указана")
+        # Экранирование специальных символов для Markdown V2
+        def escape_md(text):
+            if not text:
+                return ""
+            chars = '_*[]()~`>#+-=|{}.!'
+            return ''.join(f'\\{c}' if c in chars else c for c in str(text))
         
-        # Перевод в гектары, если площадь достаточно большая
-        if listing.area and listing.area > 10000:  # Больше 1 га
-            ha = listing.to_hectares()
-            if ha:
-                area += f" \\({ha:.2f} га\\)"
+        # Форматирование заголовка
+        title = f"*🌱 {escape_md(listing.title)}*" if listing.title else "*🌱 Земельный участок*"
         
-        # Цена за квадратный метр
-        price_per_sqm = ""
-        if listing.price_per_sqm:
-            price_per_sqm = f"\n💵 *Цена за м²*: {self._escape_markdown(f'{listing.price_per_sqm:.1f} {listing.price_currency}')}"
-        elif listing.price and listing.area and listing.area > 0:
-            price_per_sqm_value = listing.price / listing.area
-            price_per_sqm = f"\n💵 *Цена за м²*: {self._escape_markdown(f'{price_per_sqm_value:.1f} {listing.price_currency}')}"
+        # Форматирование цены
+        price_line = ""
+        if listing.price:
+            currency = listing.price_currency if listing.price_currency else "USD"
+            price_formatted = f"{int(listing.price):,}".replace(',', ' ')
+            price_line = f"💰 *Цена:* {escape_md(price_formatted)} {escape_md(currency)}\n"
+            
+            # Добавляем цену за м² если есть площадь
+            if listing.price_per_sqm and listing.price_per_sqm > 0:
+                price_per_sqm = f"{listing.price_per_sqm:.1f}".replace('.0', '')
+                price_line += f"📊 *Цена за м²:* {escape_md(price_per_sqm)} {escape_md(currency)}/м²\n"
         
-        # Местоположение
-        location = self._escape_markdown(listing.location or "Местоположение не указано")
+        # Форматирование площади
+        area_line = ""
+        if listing.area:
+            area_formatted = f"{listing.area:,}".replace(',', ' ').replace('.0', '')
+            area_line = f"📏 *Площадь:* {escape_md(area_formatted)} м²\n"
+            
+            # Переводим в гектары если площадь больше 10000 м²
+            if listing.area >= 10000:
+                hectares = listing.area / 10000
+                area_line += f"🌳 *Площадь:* {escape_md(f'{hectares:.2f}'.replace('.00', ''))} га\n"
         
-        # Коммуникации и характеристики
+        # Форматирование местоположения
+        location_line = ""
+        if listing.location:
+            location_line = f"📍 *Расположение:* {escape_md(listing.location)}\n"
+        
+        # Форматирование коммуникаций и характеристик
         features = []
         
-        if listing.has_water:
-            features.append("📋 Вода")
-        if listing.has_electricity:
+        if listing.has_water is True:
+            features.append("💧 Вода")
+        elif listing.has_water is False:
+            features.append("❌ Без воды")
+        
+        if listing.has_electricity is True:
             features.append("⚡ Электричество")
-        if listing.has_internet:
+        elif listing.has_electricity is False:
+            features.append("❌ Без электричества")
+        
+        if listing.has_internet is True:
             features.append("🌐 Интернет")
+        
         if listing.zoning:
-            features.append(f"🏢 Зонирование: {self._escape_markdown(listing.zoning)}")
-        if listing.terrain_type:
-            features.append(f"🏞 Тип местности: {self._escape_markdown(listing.terrain_type)}")
-            
-        # Добавляем дополнительные атрибуты, если они есть
-        if listing.attributes:
-            for key, value in listing.attributes.items():
-                if value and key not in ["price", "area", "location", "title"]:
-                    features.append(f"• {self._escape_markdown(str(key))}: {self._escape_markdown(str(value))}")
+            features.append(f"🏠 {escape_md(listing.zoning)}")
         
-        features_text = "\n".join(features) if features else "Характеристики не указаны"
+        features_line = ""
+        if features:
+            features_text = " · ".join(features)
+            features_line = f"🔧 *Характеристики:* {features_text}\n"
         
-        # Описание (ограничиваем длину)
-        description = ""
+        # Добавляем описание с ограничением по длине
+        description_line = ""
         if listing.description:
             # Ограничиваем длину описания
             max_desc_length = 300
-            desc = listing.description[:max_desc_length]
-            if len(listing.description) > max_desc_length:
-                desc += "..."
-            description = f"\n\n📝 *Описание*:\n{self._escape_markdown(desc)}"
-        
-        # Формируем полное сообщение
-        message = f"🏞 *{title}*\n\n"
-        message += f"💰 *Цена*: {price}\n"
-        message += f"📏 *Площадь*: {area}{price_per_sqm}\n"
-        message += f"📍 *Местоположение*: {location}\n\n"
-        message += f"*Характеристики*:\n{features_text}{description}\n\n"
-        
-        # Дата обнаружения и источник
-        source_name = {
-            "mercadolibre": "MercadoLibre",
-            "infocasas": "InfoCasas",
-            "gallito": "Gallito"
-        }.get(listing.source, listing.source)
-        
-        found_date = listing.crawled_at.strftime("%d.%m.%Y")
-        
-        message += f"🔍 Найдено {found_date} на {self._escape_markdown(source_name)}\n"
-        
-        # Ссылка на оригинальное объявление
-        url = str(listing.url)
-        message += f"🔗 [Перейти к объявлению]({url})"
-        
-        return message
-    
-    async def download_image(self, image_url: str, session: ClientSession) -> Optional[str]:
-        """
-        Скачивает изображение и возвращает путь к локальному файлу.
-        
-        :param image_url: URL изображения
-        :param session: Сессия aiohttp
-        :return: Путь к скачанному файлу или None в случае ошибки
-        """
-        if not image_url:
-            return None
-            
-        try:
-            # Создаем папку для изображений, если её нет
-            images_dir = self.cache_dir / "images"
-            images_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Генерируем имя файла на основе URL и текущего времени
-            filename = f"{int(time.time())}_{hash(image_url) % 10000}.jpg"
-            file_path = images_dir / filename
-            
-            # Скачиваем изображение
-            async with session.get(image_url, timeout=ClientTimeout(total=30)) as response:
-                if response.status != 200:
-                    self.logger.warning(f"Не удалось скачать изображение {image_url}, код статуса: {response.status}")
-                    return None
-                    
-                # Записываем изображение в файл
-                image_data = await response.read()
-                with open(file_path, 'wb') as f:
-                    f.write(image_data)
+            description = listing.description
+            if len(description) > max_desc_length:
+                description = description[:max_desc_length].strip() + "..."
                 
-                return str(file_path)
-        except Exception as e:
-            self.logger.error(f"Ошибка при скачивании изображения {image_url}: {e}")
-            return None
+            description_line = f"\n📝 {escape_md(description)}\n"
+        
+        # Добавляем источник и дату публикации
+        source_line = ""
+        if listing.source:
+            source_name = listing.source.replace("mercadolibre", "MercadoLibre")
+            source_name = source_name.replace("infocasas", "InfoCasas")
+            source_line = f"🔍 *Источник:* {escape_md(source_name)}"
+            
+            if listing.crawled_at:
+                crawled_date = listing.crawled_at.strftime("%d.%m.%Y")
+                source_line += f" · {escape_md(crawled_date)}"
+        
+        # Формируем ссылку на оригинальное объявление
+        url_line = f"\n[Открыть объявление]({escape_md(listing.url)})"
+        
+        # Собираем все компоненты сообщения
+        message_parts = [
+            title,
+            "\n",
+            price_line,
+            area_line,
+            location_line,
+            features_line,
+            description_line,
+            source_line,
+            url_line
+        ]
+        
+        return "".join(message_parts)
     
-    async def _send_request(self, method: str, params: Dict, session: ClientSession, files: Optional[Dict] = None) -> Dict:
+    async def download_image(self, url: str) -> Optional[bytes]:
         """
-        Отправляет запрос к Telegram API с повторными попытками при ошибках.
+        Загружает изображение по URL.
         
-        :param method: Метод API
-        :param params: Параметры запроса
-        :param session: Сессия aiohttp
-        :param files: Файлы для отправки
-        :return: Ответ от API
+        Args:
+            url: URL изображения
+            
+        Returns:
+            Optional[bytes]: Данные изображения или None в случае ошибки
         """
-        url = f"{self.api_url}/{method}"
-        attempts = 0
-        
-        while attempts < self.max_retries:
+        for attempt in range(1, self.max_retries + 1):
             try:
-                if files:
-                    # Отправка файлов через multipart/form-data
-                    data = aiohttp.FormData()
-                    
-                    # Добавляем обычные параметры
-                    for key, value in params.items():
-                        data.add_field(key, str(value))
-                    
-                    # Добавляем файлы
-                    for file_key, file_path in files.items():
-                        with open(file_path, 'rb') as f:
-                            data.add_field(file_key, f, filename=os.path.basename(file_path))
-                    
-                    async with session.post(url, data=data) as response:
-                        result = await response.json()
+                response = requests.get(url, timeout=15)
+                if response.status_code == 200:
+                    logger.debug(f"Успешно загружено изображение: {url}")
+                    return response.content
                 else:
-                    # Обычный POST запрос для текстовых сообщений
-                    async with session.post(url, json=params) as response:
-                        result = await response.json()
-                
-                if result.get('ok'):
-                    return result
-                else:
-                    error_msg = result.get('description', 'Неизвестная ошибка')
-                    self.logger.warning(f"Ошибка API Telegram: {error_msg}")
-                    
-                    # Проверяем, стоит ли повторять запрос
-                    if 'retry_after' in result:
-                        retry_after = int(result['retry_after'])
-                        self.logger.info(f"Превышен лимит запросов, ожидаем {retry_after} секунд")
-                        await asyncio.sleep(retry_after)
-                    elif 'Too Many Requests' in error_msg:
-                        # Если API не указал время ожидания, используем наше значение
-                        await asyncio.sleep(self.retry_delay * (attempts + 1))
-                    else:
-                        # Для других ошибок тоже делаем повторную попытку
-                        await asyncio.sleep(self.retry_delay)
-            
+                    logger.warning(f"Ошибка при загрузке изображения: {url}, статус: {response.status_code}")
             except Exception as e:
-                self.logger.error(f"Ошибка при отправке запроса к Telegram API: {e}")
+                logger.warning(f"Ошибка при загрузке изображения ({attempt}/{self.max_retries}): {url}, {e}")
+                
+            # Задержка перед повторной попыткой
+            if attempt < self.max_retries:
                 await asyncio.sleep(self.retry_delay)
-            
-            attempts += 1
         
-        raise Exception(f"Не удалось отправить запрос к Telegram API после {self.max_retries} попыток")
-    
-    async def send_message(self, text: str, session: ClientSession) -> Dict:
-        """
-        Отправляет текстовое сообщение в канал Telegram.
-        
-        :param text: Текст сообщения с разметкой Markdown V2
-        :param session: Сессия aiohttp
-        :return: Ответ от API
-        """
-        params = {
-            'chat_id': self.chat_id,
-            'text': text,
-            'parse_mode': 'MarkdownV2',
-            'disable_web_page_preview': False
-        }
-        
-        return await self._send_request('sendMessage', params, session)
-    
-    async def send_photo(self, photo_path: str, caption: str, session: ClientSession) -> Dict:
-        """
-        Отправляет изображение с подписью в канал Telegram.
-        
-        :param photo_path: Путь к файлу изображения
-        :param caption: Подпись к изображению с разметкой Markdown V2
-        :param session: Сессия aiohttp
-        :return: Ответ от API
-        """
-        params = {
-            'chat_id': self.chat_id,
-            'caption': caption,
-            'parse_mode': 'MarkdownV2'
-        }
-        
-        files = {'photo': photo_path}
-        
-        return await self._send_request('sendPhoto', params, session, files)
-    
-    async def send_media_group(self, media_paths: List[str], caption: str, session: ClientSession) -> Dict:
-        """
-        Отправляет группу медиафайлов в канал Telegram.
-        
-        :param media_paths: Пути к файлам изображений
-        :param caption: Подпись к медиагруппе с разметкой Markdown V2
-        :param session: Сессия aiohttp
-        :return: Ответ от API
-        """
-        # Ограничиваем количество изображений до максимального
-        media_paths = media_paths[:self.max_images]
-        
-        # Подготавливаем медиа-группу
-        media = []
-        for i, path in enumerate(media_paths):
-            media_item = {
-                'type': 'photo',
-                'media': f'attach://{i}'
-            }
-            
-            # Добавляем подпись только к первому медиафайлу
-            if i == 0 and caption:
-                media_item['caption'] = caption
-                media_item['parse_mode'] = 'MarkdownV2'
-            
-            media.append(media_item)
-        
-        params = {
-            'chat_id': self.chat_id,
-            'media': json.dumps(media)
-        }
-        
-        files = {str(i): path for i, path in enumerate(media_paths)}
-        
-        return await self._send_request('sendMediaGroup', params, session, files)
+        return None
     
     async def send_listing(self, listing: Listing) -> bool:
         """
-        Отправляет объявление в канал Telegram.
+        Отправляет объявление в Telegram.
         
-        :param listing: Объект объявления
-        :return: True если отправка успешна, False в противном случае
+        Args:
+            listing: Объект объявления
+            
+        Returns:
+            bool: True в случае успешной отправки, иначе False
         """
+        if not self.bot_token or not self.chat_id:
+            logger.error("Не указаны токен бота или ID чата")
+            return False
+        
         # Проверяем, было ли объявление уже отправлено
-        listing_url = str(listing.url)
-        if listing_url in self.sent_listings:
-            self.logger.info(f"Объявление {listing_url} уже было отправлено ранее")
+        if listing.url in self.sent_listings:
+            logger.info(f"Объявление уже было отправлено ранее: {listing.url}")
             return False
         
         # Форматируем сообщение
-        message = self.format_message(listing)
+        message_text = self.format_message(listing)
         
-        # Проверяем, есть ли изображения
-        has_images = listing.images and len(listing.images) > 0
-        
-        async with aiohttp.ClientSession() as session:
-            try:
-                if has_images and self.download_images:
-                    # Скачиваем изображения
-                    image_paths = []
-                    for image_url in listing.images[:self.max_images]:
-                        image_path = await self.download_image(image_url, session)
-                        if image_path:
-                            image_paths.append(image_path)
-                    
-                    # Если есть скачанные изображения, отправляем их
-                    if image_paths:
-                        if len(image_paths) == 1:
-                            # Отправляем одно изображение с подписью
-                            await self.send_photo(image_paths[0], message, session)
+        try:
+            # API URL для отправки сообщения
+            api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMediaGroup"
+            
+            # Загружаем изображения
+            images = []
+            if listing.images:
+                for i, img_url in enumerate(listing.images[:self.max_images_per_listing]):
+                    image_data = await self.download_image(img_url)
+                    if image_data:
+                        images.append(image_data)
+            
+            # Если есть изображения, отправляем их группой
+            if images:
+                media = []
+                
+                # Первое изображение с подписью (сообщением)
+                media.append({
+                    'type': 'photo',
+                    'media': f'attach://photo0',
+                    'caption': message_text,
+                    'parse_mode': 'MarkdownV2'
+                })
+                
+                # Остальные изображения
+                for i in range(1, len(images)):
+                    media.append({
+                        'type': 'photo',
+                        'media': f'attach://photo{i}'
+                    })
+                
+                # Формируем данные для отправки
+                files = {}
+                for i, img_data in enumerate(images):
+                    files[f'photo{i}'] = img_data
+                
+                # Параметры запроса
+                params = {
+                    'chat_id': self.chat_id,
+                    'media': json.dumps(media)
+                }
+                
+                # Отправляем группу изображений
+                for attempt in range(1, self.max_retries + 1):
+                    try:
+                        response = requests.post(api_url, params=params, files=files, timeout=30)
+                        if response.status_code == 200:
+                            logger.info(f"Объявление успешно отправлено в Telegram: {listing.url}")
+                            self.sent_listings.add(listing.url)
+                            self.save_sent_listings()
+                            return True
                         else:
-                            # Отправляем группу изображений с подписью
-                            await self.send_media_group(image_paths, message, session)
-                        
-                        # Удаляем скачанные изображения
-                        for path in image_paths:
-                            try:
-                                os.remove(path)
-                            except:
-                                pass
+                            logger.warning(f"Ошибка при отправке объявления в Telegram: {listing.url}, "
+                                          f"статус: {response.status_code}, ответ: {response.text}")
+                    except Exception as e:
+                        logger.warning(f"Ошибка при отправке объявления в Telegram ({attempt}/{self.max_retries}): "
+                                      f"{listing.url}, {e}")
+                    
+                    # Задержка перед повторной попыткой
+                    if attempt < self.max_retries:
+                        await asyncio.sleep(self.retry_delay)
+            
+            # Если нет изображений или не удалось отправить группой, отправляем текстовое сообщение
+            api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+            params = {
+                'chat_id': self.chat_id,
+                'text': message_text,
+                'parse_mode': 'MarkdownV2',
+                'disable_web_page_preview': False  # Включаем предпросмотр страницы
+            }
+            
+            for attempt in range(1, self.max_retries + 1):
+                try:
+                    response = requests.post(api_url, json=params, timeout=15)
+                    if response.status_code == 200:
+                        logger.info(f"Текстовое сообщение успешно отправлено в Telegram: {listing.url}")
+                        self.sent_listings.add(listing.url)
+                        self.save_sent_listings()
+                        return True
                     else:
-                        # Если не удалось скачать изображения, отправляем текстовое сообщение
-                        await self.send_message(message, session)
-                else:
-                    # Отправляем текстовое сообщение без изображений
-                    await self.send_message(message, session)
+                        logger.warning(f"Ошибка при отправке текстового сообщения в Telegram: {listing.url}, "
+                                      f"статус: {response.status_code}, ответ: {response.text}")
+                except Exception as e:
+                    logger.warning(f"Ошибка при отправке текстового сообщения в Telegram ({attempt}/{self.max_retries}): "
+                                  f"{listing.url}, {e}")
                 
-                # Добавляем URL в список отправленных и сохраняем
-                self.sent_listings.add(listing_url)
-                self._save_sent_listings()
-                
-                self.logger.info(f"Объявление {listing_url} успешно отправлено в Telegram")
-                return True
-                
-            except Exception as e:
-                self.logger.error(f"Ошибка при отправке объявления {listing_url} в Telegram: {e}")
-                return False
-    
-    async def send_listings(self, listings: List[Listing], delay: float = 1.0) -> int:
-        """
-        Отправляет несколько объявлений в канал Telegram с задержкой между сообщениями.
+                # Задержка перед повторной попыткой
+                if attempt < self.max_retries:
+                    await asyncio.sleep(self.retry_delay)
+            
+        except Exception as e:
+            logger.error(f"Непредвиденная ошибка при отправке объявления в Telegram: {listing.url}, {e}")
         
-        :param listings: Список объектов объявлений
-        :param delay: Задержка между отправками в секундах
-        :return: Количество успешно отправленных объявлений
+        return False
+    
+    async def send_listings(self, listings: List[Listing], delay: float = 2.0) -> Tuple[int, int]:
+        """
+        Отправляет список объявлений в Telegram с задержкой между сообщениями.
+        
+        Args:
+            listings: Список объявлений
+            delay: Задержка между отправками сообщений (в секундах)
+            
+        Returns:
+            Tuple[int, int]: Количество успешно отправленных и пропущенных объявлений
         """
         sent_count = 0
+        skipped_count = 0
         
         for listing in listings:
+            # Проверяем, было ли объявление уже отправлено
+            if listing.url in self.sent_listings:
+                logger.debug(f"Пропуск объявления (уже отправлено): {listing.url}")
+                skipped_count += 1
+                continue
+            
+            # Отправляем объявление
             success = await self.send_listing(listing)
+            
             if success:
                 sent_count += 1
+            else:
+                skipped_count += 1
             
-            # Делаем паузу между отправками, чтобы не превысить лимиты API Telegram
-            if listing != listings[-1]:  # Пропускаем задержку после последнего элемента
+            # Задержка между отправками для избежания ограничений API
+            if delay > 0 and listings.index(listing) < len(listings) - 1:
                 await asyncio.sleep(delay)
         
-        return sent_count
+        logger.info(f"Отправлено {sent_count} объявлений, пропущено {skipped_count} объявлений")
+        return sent_count, skipped_count
+    
+    async def send_test_message(self, text: str = "Тестовое сообщение") -> bool:
+        """
+        Отправляет тестовое сообщение для проверки работоспособности.
+        
+        Args:
+            text: Текст тестового сообщения
+            
+        Returns:
+            bool: True в случае успешной отправки, иначе False
+        """
+        if not self.bot_token or not self.chat_id:
+            logger.error("Не указаны токен бота или ID чата")
+            return False
+        
+        api_url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
+        params = {
+            'chat_id': self.chat_id,
+            'text': text,
+            'parse_mode': 'HTML'
+        }
+        
+        try:
+            response = requests.post(api_url, json=params, timeout=15)
+            if response.status_code == 200:
+                logger.info("Тестовое сообщение успешно отправлено")
+                return True
+            else:
+                logger.error(f"Ошибка при отправке тестового сообщения: "
+                           f"статус {response.status_code}, ответ: {response.text}")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке тестового сообщения: {e}")
+        
+        return False
 
-# Функция для тестирования отправки
+
 async def test_telegram_sender():
-    """Тестирует отправку тестового объявления в Telegram."""
+    """Тестирование отправки в Telegram"""
     from dotenv import load_dotenv
     load_dotenv()
     
@@ -447,40 +432,45 @@ async def test_telegram_sender():
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     
     if not bot_token or not chat_id:
-        logging.error("Не заданы TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID в переменных окружения")
+        logger.error("Не указаны токен бота или ID чата в .env файле")
         return
     
     # Создаем тестовое объявление
     test_listing = Listing(
         id="test123",
-        url="https://example.com/listing/123",
+        url="https://example.com/test",
+        title="Прекрасный земельный участок у моря",
         source="test",
-        title="Тестовый земельный участок у озера",
-        price=75000,
+        price=45000,
         price_currency="USD",
-        area=5000,
-        area_unit="m²",
-        location="Canelones, Uruguay",
-        description="Прекрасный земельный участок с видом на озеро. Идеально подходит для строительства загородного дома.",
+        location="Роча, Ла-Палома, Уругвай",
+        area=1200,
+        description="Участок с прекрасным видом на океан. Подходит для строительства дома или туристического бизнеса.",
         images=["https://picsum.photos/800/600", "https://picsum.photos/800/601"],
         has_water=True,
         has_electricity=True,
-        terrain_type="Холмистый"
+        has_internet=True,
+        zoning="Жилая зона",
+        crawled_at=datetime.now()
     )
     
-    # Инициализируем отправителя
-    sender = TelegramSender(bot_token, chat_id)
+    # Создаем отправителя
+    sender = TelegramSender(bot_token=bot_token, chat_id=chat_id)
+    
+    # Отправляем тестовое сообщение
+    await sender.send_test_message("🧪 Тестирование отправки объявлений")
     
     # Отправляем тестовое объявление
-    result = await sender.send_listing(test_listing)
+    success = await sender.send_listing(test_listing)
     
-    if result:
-        logging.info("Тестовое объявление успешно отправлено")
+    if success:
+        logger.info("✅ Тестовое объявление успешно отправлено")
     else:
-        logging.error("Не удалось отправить тестовое объявление")
+        logger.error("❌ Ошибка при отправке тестового объявления")
+
 
 if __name__ == "__main__":
-    # Настройка логирования
+    # Настраиваем логирование
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
