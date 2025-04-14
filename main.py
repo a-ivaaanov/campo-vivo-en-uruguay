@@ -10,6 +10,7 @@ import logging
 import asyncio
 from datetime import datetime
 from pathlib import Path
+import traceback
 
 # Настройка логирования
 logging.basicConfig(
@@ -124,12 +125,39 @@ async def process_results(listings):
     if not new_listings:
         logger.info("Все найденные объявления уже были опубликованы.")
         return 0
-        
-    # Здесь можно добавить код для отправки в Telegram
+    
+    # Инициализируем отправку в Telegram
+    sent_count = 0
+    telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    
+    if telegram_bot_token and telegram_chat_id:
+        try:
+            # Импортируем TelegramSender
+            from app.telegram_sender import TelegramSender
+            
+            # Создаем экземпляр отправителя
+            sender = TelegramSender(
+                bot_token=telegram_bot_token,
+                chat_id=telegram_chat_id
+            )
+            
+            # Отправляем объявления
+            logger.info(f"Отправка {len(new_listings)} новых объявлений в Telegram...")
+            sent_count, skipped_count = await sender.send_listings(new_listings, delay=3.0)
+            
+            logger.info(f"Отправлено {sent_count} объявлений в Telegram, пропущено {skipped_count}")
+        except Exception as e:
+            logger.error(f"Ошибка при отправке объявлений в Telegram: {e}")
+            logger.debug(f"Полная ошибка: {traceback.format_exc()}")
+    else:
+        logger.warning("Не указаны TELEGRAM_BOT_TOKEN или TELEGRAM_CHAT_ID в переменных окружения")
+        logger.info("Отправка в Telegram пропущена")
+    
+    # Добавляем все URL в список опубликованных
     for listing in new_listings:
-        # Добавляем URL в список опубликованных
         published_urls.append(str(listing.url))
-        
+    
     # Сохраняем обновленный список опубликованных URL
     save_published_urls()
     
